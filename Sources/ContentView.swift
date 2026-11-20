@@ -3,22 +3,29 @@ import UIKit
 
 struct CropItem: Identifiable {
     let id = UUID()
-    let preview: UIImage     // 原图 + 红框（检测到的裁剪范围）
+    let preview: UIImage
     let cropped: UIImage
     let info: String
 }
 
 struct ContentView: View {
+    @State private var originals: [UIImage] = []
     @State private var items: [CropItem] = []
     @State private var showPicker = false
     @State private var showShare = false
     @State private var shareItems: [Any] = []
-    @State private var status = "选几张截图，红框是识别到的页面范围"
+    @State private var status = "选几张截图"
+
+    // 手动模式
+    @State private var manual = false
+    @State private var topPct: Double = 0.15
+    @State private var bottomPct: Double = 0.70
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 content
+                controls
                 bottomBar
             }
             .navigationTitle(versionText)
@@ -26,16 +33,8 @@ struct ContentView: View {
             .sheet(isPresented: $showPicker) {
                 PhotoPicker { imgs in
                     guard !imgs.isEmpty else { return }
-                    var out: [CropItem] = []
-                    var lastInfo = ""
-                    for img in imgs {
-                        let r = Cropper.cropPage(img)
-                        let pv = Self.drawOverlay(original: img, rect: r.rect)
-                        out.append(CropItem(preview: pv, cropped: r.image, info: r.info))
-                        lastInfo = r.info
-                    }
-                    items = out
-                    status = "\(out.count) 页：\(lastInfo)"
+                    originals = imgs
+                    rebuild()
                 }
             }
         }
@@ -62,39 +61,54 @@ struct ContentView: View {
                 Text(status)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
                     .padding(.top, 14)
                 Spacer()
             }
         } else {
-            VStack(spacing: 0) {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
-                        ForEach(items) { it in
-                            VStack(spacing: 4) {
-                                Image(uiImage: it.preview)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
-                                Text(it.info)
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
-                            }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
+                    ForEach(items) { it in
+                        VStack(spacing: 4) {
+                            Image(uiImage: it.preview)
+                                .resizable()
+                                .scaledToFit()
+                                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
+                            Text(it.info)
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
                         }
                     }
-                    .padding(12)
                 }
-                Text(status)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
+                .padding(10)
             }
         }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 6) {
+            Toggle("手动调整裁剪范围", isOn: $manual)
+                .font(.footnote)
+                .onChange(of: manual) { _ in rebuild() }
+
+            if manual {
+                HStack {
+                    Text("顶部 \(Int(topPct * 100))%")
+                        .font(.caption2)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: $topPct, in: 0...0.5, step: 0.01) { _ in rebuild() }
+                }
+                HStack {
+                    Text("底部 \(Int(bottomPct * 100))%")
+                        .font(.caption2)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: $bottomPct, in: 0.3...1.0, step: 0.01) { _ in rebuild() }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     private var bottomBar: some View {
@@ -129,6 +143,22 @@ struct ContentView: View {
         .padding(.bottom, 8)
     }
 
+    private func rebuild() {
+        guard !originals.isEmpty else { return }
+        var out: [CropItem] = []
+        var lastInfo = ""
+        for img in originals {
+            let r = manual
+                ? Cropper.cropManual(img, topPct: topPct, bottomPct: bottomPct)
+                : Cropper.cropAuto(img)
+            let pv = Self.drawOverlay(original: img, rect: r.rect)
+            out.append(CropItem(preview: pv, cropped: r.image, info: r.info))
+            lastInfo = r.info
+        }
+        items = out
+        status = "\(out.count) 页 · \(lastInfo)"
+    }
+
     private func documentsDir() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
@@ -159,7 +189,6 @@ struct ContentView: View {
         }
     }
 
-    /// 在原图上画出检测到的裁剪框，用于肉眼核对
     static func drawOverlay(original: UIImage, rect: CGRect) -> UIImage {
         let w = max(original.size.width * original.scale, 1)
         let h = max(original.size.height * original.scale, 1)

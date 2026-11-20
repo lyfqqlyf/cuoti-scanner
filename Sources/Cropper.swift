@@ -1,16 +1,36 @@
 import UIKit
 
-/// 裁剪算法 v7：返回裁剪结果 + 检测到的矩形 + 诊断字符串，方便在界面上直接看。
+/// 裁剪：自动检测 + 手动百分比两种模式
 enum Cropper {
 
     struct Result {
         let image: UIImage
-        let rect: CGRect       // 在原图坐标系里的裁剪框
-        let sourceSize: CGSize
+        let rect: CGRect
         let info: String
     }
 
-    static func cropPage(_ image: UIImage) -> Result {
+    // MARK: - 手动百分比裁剪（最可靠）
+
+    static func cropManual(_ image: UIImage, topPct: Double, bottomPct: Double) -> Result {
+        guard let cgImg = image.cgImage else {
+            return Result(image: image, rect: .zero, info: "无 CGImage")
+        }
+        let w = cgImg.width
+        let h = cgImg.height
+        let y0 = Int(Double(h) * max(0, min(0.9, topPct)))
+        let y1 = Int(Double(h) * max(topPct + 0.05, min(1.0, bottomPct)))
+        let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
+        guard let c = cgImg.cropping(to: rect) else {
+            return Result(image: image, rect: .zero, info: "裁剪失败")
+        }
+        return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
+                      rect: rect,
+                      info: "手动 \(Int(topPct * 100))%~\(Int(bottomPct * 100))% → \(Int(rect.width))x\(Int(rect.height))")
+    }
+
+    // MARK: - 自动检测
+
+    static func cropAuto(_ image: UIImage) -> Result {
         var cg = image.cgImage
         if cg == nil {
             let fmt = UIGraphicsImageRendererFormat.default()
@@ -20,14 +40,13 @@ enum Cropper {
             cg = rendered.cgImage
         }
         guard let cgImg = cg else {
-            return Result(image: image, rect: .zero, sourceSize: image.size, info: "无 CGImage")
+            return Result(image: image, rect: .zero, info: "无 CGImage")
         }
 
         let w = cgImg.width
         let h = cgImg.height
-        let src = CGSize(width: w, height: h)
         guard w > 60, h > 60 else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), sourceSize: src, info: "图太小")
+            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "图太小")
         }
 
         let bpp = 4
@@ -40,7 +59,7 @@ enum Cropper {
         guard let ctx = CGContext(data: buffer, width: w, height: h,
                                   bitsPerComponent: 8, bytesPerRow: bpr, space: cs,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), sourceSize: src, info: "建位图失败")
+            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "建位图失败")
         }
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: 1, y: -1)
@@ -50,32 +69,23 @@ enum Cropper {
             let o = y * bpr + x * bpp
             return buffer[o] >= 246 && buffer[o + 1] >= 246 && buffer[o + 2] >= 246
         }
-        func isGray(_ x: Int, _ y: Int) -> Bool {
-            let o = y * bpr + x * bpp
-            let r = Int(buffer[o]), g = Int(buffer[o + 1]), b = Int(buffer[o + 2])
-            return abs(r - 242) < 12 && abs(g - 243) < 12 && abs(b - 249) < 12
-        }
         func isDark(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
             return buffer[o] < 200 || buffer[o + 1] < 200 || buffer[o + 2] < 200
         }
 
         var whiteFrac = [Double](repeating: 0, count: h)
-        var grayFrac = [Double](repeating: 0, count: h)
         for y in 0..<h {
             var wc = 0
-            var gc = 0
             var x = 0
             while x < w {
                 if isWhite(x, y) { wc += 1 }
-                if isGray(x, y) { gc += 1 }
                 x += 1
             }
             whiteFrac[y] = Double(wc) / Double(w)
-            grayFrac[y] = Double(gc) / Double(w)
         }
 
-        // 粗定位
+        // 找最长的白行段（页面卡片）
         var runs: [(Int, Int)] = []
         var s = -1
         for y in 0..<h {
@@ -97,116 +107,68 @@ enum Cropper {
                 merged.append(r)
             }
         }
-        let minLen = Int(Double(h) * 0.15)
-        merged = merged.filter { $0.1 - $0.0 >= minLen }
+        merged = merged.filter { $0.1 - $0.0 >= Int(Double(h) * 0.15) }
 
-        func fallback(_ why: String) -> Result {
-            let y0 = Int(Double(h) * 0.16)
-            let y1 = Int(Double(h) * 0.70)
-            let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
-            if let c = cgImg.cropping(to: rect) {
-                return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
-                              rect: rect, sourceSize: src,
-                              info: "\(why) → 兜底 (\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.maxX)),\(Int(rect.maxY)))")
-            }
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), sourceSize: src, info: "\(why) → 未裁剪")
+        guard let band = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else {
+            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "找不到白色页")
         }
 
-        guard let best = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else {
-            return fallback("找不到白色页")
-        }
-        var top = best.0
-        var bottom = best.1
-        if bottom - top < h / 6 { return fallback("白页太短") }
-
-        var left = 0
-        var right = w - 1
-        var bestLen = 0
-        for k in 0..<24 {
-            let sy = top + (bottom - top) * (k + 1) / 25
-            var st = -1
+        // 卡片内找第一行和最后一行深色内容
+        var firstDark = -1
+        var lastDark = -1
+        for y in band.0...band.1 {
+            var has = false
             var x = 0
             while x < w {
-                if isWhite(x, sy) {
-                    if st < 0 { st = x }
-                } else if st >= 0 {
-                    if x - st > bestLen { bestLen = x - st; left = st; right = x - 1 }
-                    st = -1
-                }
+                if isDark(x, y) { has = true; break }
                 x += 1
             }
-            if st >= 0 && w - st > bestLen { bestLen = w - st; left = st; right = w - 1 }
-        }
-        if bestLen < w / 3 { left = 0; right = w - 1 }
-
-        // 灰带兜底
-        var y2 = top + max(10, (bottom - top) / 20)
-        while y2 <= bottom {
-            if grayFrac[y2] > 0.5 {
-                bottom = y2 - 1
-                break
-            }
-            y2 += 1
-        }
-
-        // 纵向收紧（只看深色内容）
-        var cy0 = -1
-        var cy1 = -1
-        if top <= bottom {
-            for yy in top...bottom {
-                var has = false
-                var xx = left
-                while xx <= right {
-                    if isDark(xx, yy) { has = true; break }
-                    xx += 1
-                }
-                if has {
-                    if cy0 < 0 { cy0 = yy }
-                    cy1 = yy
-                }
+            if has {
+                if firstDark < 0 { firstDark = y }
+                lastDark = y
             }
         }
-        if cy0 >= 0 {
-            let pad = 24
-            top = max(top, cy0 - pad)
-            bottom = min(bottom, cy1 + pad)
+        if firstDark < 0 || lastDark < 0 {
+            return Result(image: image, rect: CGRect(x: 0, y: band.0, width: w, height: band.1 - band.0 + 1), info: "无深色内容")
         }
 
-        // 去页码
-        let cardH = bottom - top + 1
-        if cardH > 100 && top <= bottom {
-            var blocks: [(Int, Int)] = []
-            var inBlock = false
-            var sRow = 0
-            for ry in top...bottom {
-                var has = false
-                var rx = left
-                while rx <= right {
-                    if isDark(rx, ry) { has = true; break }
-                    rx += 1
-                }
-                if has && !inBlock { inBlock = true; sRow = ry }
-                else if !has && inBlock { inBlock = false; blocks.append((sRow, ry - 1)) }
+        // 最后一块内容如果孤立在底部（页码），去掉它
+        var blocks: [(Int, Int)] = []
+        var inBlock = false
+        var sRow = 0
+        for y in band.0...band.1 {
+            var has = false
+            var x = 0
+            while x < w {
+                if isDark(x, y) { has = true; break }
+                x += 1
             }
-            if inBlock { blocks.append((sRow, bottom)) }
+            if has && !inBlock { inBlock = true; sRow = y }
+            else if !has && inBlock { inBlock = false; blocks.append((sRow, y - 1)) }
+        }
+        if inBlock { blocks.append((sRow, band.1)) }
 
-            if blocks.count >= 2 {
-                let lastB = blocks[blocks.count - 1]
-                let prevB = blocks[blocks.count - 2]
-                let gap = lastB.0 - prevB.1
-                let lastH = lastB.1 - lastB.0 + 1
-                if Double(gap) > Double(cardH) * 0.06 &&
-                    Double(lastH) < Double(cardH) * 0.05 &&
-                    lastB.0 > top + Int(Double(cardH) * 0.8) {
-                    bottom = min(bottom, prevB.1 + 12)
-                }
+        var bottomLimit = lastDark
+        if blocks.count >= 2 {
+            let lastB = blocks[blocks.count - 1]
+            let prevB = blocks[blocks.count - 2]
+            let gap = lastB.0 - prevB.1
+            let lastH = lastB.1 - lastB.0 + 1
+            let bandH = band.1 - band.0 + 1
+            if gap > Int(Double(bandH) * 0.05) && lastH < Int(Double(bandH) * 0.06) {
+                bottomLimit = prevB.1
             }
         }
 
-        let rect = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
-        guard let cropped = cgImg.cropping(to: rect) else { return fallback("裁剪失败") }
-        let info = "\(w)x\(h) → (\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.maxX)),\(Int(rect.maxY))) = \(Int(rect.width))x\(Int(rect.height))"
-        return Result(image: UIImage(cgImage: cropped, scale: 1, orientation: .up),
-                      rect: rect, sourceSize: src, info: info)
+        let pad = 24
+        let y0 = max(band.0, firstDark - pad)
+        let y1 = min(band.1, bottomLimit + pad)
+        let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
+        guard let c = cgImg.cropping(to: rect) else {
+            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "裁剪失败")
+        }
+        return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
+                      rect: rect,
+                      info: "自动 → \(Int(rect.minY))~\(Int(rect.maxY)) = \(Int(rect.width))x\(Int(rect.height))")
     }
 }
