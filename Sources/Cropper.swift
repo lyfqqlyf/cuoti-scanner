@@ -1,10 +1,10 @@
 import UIKit
 
 /// 从截图里裁出试卷内容：
-/// 1) 用「大面积灰色分隔带」定位页面底部（比纯白段稳）
-/// 2) 用最长白色段定左右
-/// 3) 再按非白像素外接框收紧，去掉多余白边
-/// 4) 去掉底部孤立的页码行（如「第2页/共2页」）
+/// 1) 行扫描找「最长的连续白色行段」= 页面卡片（允许小缺口）
+/// 2) 用最长白色段定左右边界
+/// 3) 纵向按非白内容收紧（横向保持卡片宽度，保证多页字号一致）
+/// 4) 去掉底部孤立的页码行（如「第2页/共3页」）
 enum Cropper {
 
     static func cropPage(_ image: UIImage) -> UIImage {
@@ -37,149 +37,131 @@ enum Cropper {
             let o = y * bpr + x * bpp
             return buffer[o] >= 248 && buffer[o + 1] >= 248 && buffer[o + 2] >= 248
         }
-        func isGray(_ x: Int, _ y: Int) -> Bool {
+        func isContent(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
-            let r = Int(buffer[o]), g = Int(buffer[o + 1]), b = Int(buffer[o + 2])
-            return abs(r - 242) < 10 && abs(g - 243) < 10 && abs(b - 249) < 10
+            return buffer[o] < 245 || buffer[o + 1] < 245 || buffer[o + 2] < 245
         }
 
-        // 行统计
+        // 每行白色占比
         var whiteFrac = [Double](repeating: 0, count: h)
-        var grayFrac = [Double](repeating: 0, count: h)
         var y = 0
         while y < h {
             var wc = 0
-            var gc = 0
             var x = 0
             while x < w {
                 if isWhite(x, y) { wc += 1 }
-                if isGray(x, y) { gc += 1 }
                 x += 1
             }
             whiteFrac[y] = Double(wc) / Double(w)
-            grayFrac[y] = Double(gc) / Double(w)
             y += 1
         }
 
-        // 页面顶部
-        var top = 0
-        for yy in 0..<h where whiteFrac[yy] > 0.5 {
-            top = yy
-            break
+        // 连续白行段（允许小缺口）
+        var runs: [(Int, Int)] = []
+        var start = -1
+        for yy in 0..<h {
+            if whiteFrac[yy] > 0.5 {
+                if start < 0 { start = yy }
+            } else if start >= 0 {
+                runs.append((start, yy - 1))
+                start = -1
+            }
         }
+        if start >= 0 { runs.append((start, h - 1)) }
 
-        // 页面底部：顶部之后第一段灰色带
-        var bottom = -1
-        var yy = top + 10
-        while yy < h {
-            if grayFrac[yy] > 0.5 {
-                bottom = yy - 1
-                break
-            }
-            yy += 1
-        }
-        if bottom < 0 {
-            for k in stride(from: h - 1, through: top, by: -1) where whiteFrac[k] > 0.5 {
-                bottom = k
-                break
+        let mergeGap = max(8, Int(Double(h) * 0.015))
+        var merged: [(Int, Int)] = []
+        for r in runs {
+            if let last = merged.last, r.0 - last.1 <= mergeGap {
+                merged[merged.count - 1] = (last.0, r.1)
+            } else {
+                merged.append(r)
             }
         }
-        if bottom < 0 || bottom - top < h / 5 { bottom = h - 1 }
+        guard var best = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else { return image }
+        if best.1 - best.0 < h / 5 { return image }
+
+        var top = best.0
+        var bottom = best.1
 
         // 左右：页面中段多行取最长白色段
         var left = 0
         var right = w - 1
-        var best = 0
+        var bestLen = 0
         for k in 0..<20 {
             let sy = top + (bottom - top) * (k + 1) / 21
-            var start = -1
+            var s = -1
             var x = 0
             while x < w {
                 if isWhite(x, sy) {
-                    if start < 0 { start = x }
-                } else if start >= 0 {
-                    if x - start > best { best = x - start; left = start; right = x - 1 }
-                    start = -1
+                    if s < 0 { s = x }
+                } else if s >= 0 {
+                    if x - s > bestLen { bestLen = x - s; left = s; right = x - 1 }
+                    s = -1
                 }
                 x += 1
             }
-            if start >= 0 && w - start > best { best = w - start; left = start; right = w - 1 }
+            if s >= 0 && w - s > bestLen { bestLen = w - s; left = s; right = w - 1 }
         }
-        if best < w / 3 { left = 0; right = w - 1 }
+        if bestLen < w / 3 { left = 0; right = w - 1 }
 
-        // 卡片区域
-        var x0 = left, x1 = right, y0 = top, y1 = bottom
-
-        // 非白内容外接框（在卡片内）
-        var cx0 = x1, cx1 = x0, cy0 = y1, cy1 = y0
-        var found = false
-        var ry = y0
-        while ry <= y1 {
-            var rx = x0
-            while rx <= x1 {
-                let o = ry * bpr + rx * bpp
-                if buffer[o] < 245 || buffer[o + 1] < 245 || buffer[o + 2] < 245 {
-                    if rx < cx0 { cx0 = rx }
-                    if rx > cx1 { cx1 = rx }
-                    if ry < cy0 { cy0 = ry }
-                    if ry > cy1 { cy1 = ry }
-                    found = true
-                }
-                rx += 1
+        // 纵向按内容收紧
+        var cy0 = -1
+        var cy1 = -1
+        var yy2 = top
+        while yy2 <= bottom {
+            var has = false
+            var xx = left
+            while xx <= right {
+                if isContent(xx, yy2) { has = true; break }
+                xx += 1
             }
-            ry += 1
+            if has {
+                if cy0 < 0 { cy0 = yy2 }
+                cy1 = yy2
+            }
+            yy2 += 1
         }
-        if found {
+        if cy0 >= 0 {
             let pad = 24
-            x0 = max(x0, cx0 - pad)
-            x1 = min(x1, cx1 + pad)
-            y0 = max(y0, cy0 - pad)
-            y1 = min(y1, cy1 + pad)
+            top = max(top, cy0 - pad)
+            bottom = min(bottom, cy1 + pad)
         }
 
-        // 去掉底部孤立页码行
-        let cardH = y1 - y0 + 1
+        // 去掉底部孤立页码
+        let cardH = bottom - top + 1
         if cardH > 100 {
             var blocks: [(Int, Int)] = []
             var inBlock = false
-            var startRow = 0
-            var ry2 = y0
-            while ry2 <= y1 {
-                var hasContent = false
-                var rx2 = x0
-                while rx2 <= x1 {
-                    let o = ry2 * bpr + rx2 * bpp
-                    if buffer[o] < 245 || buffer[o + 1] < 245 || buffer[o + 2] < 245 {
-                        hasContent = true
-                        break
-                    }
-                    rx2 += 1
+            var sRow = 0
+            var ry = top
+            while ry <= bottom {
+                var has = false
+                var rx = left
+                while rx <= right {
+                    if isContent(rx, ry) { has = true; break }
+                    rx += 1
                 }
-                if hasContent && !inBlock {
-                    inBlock = true
-                    startRow = ry2
-                } else if !hasContent && inBlock {
-                    inBlock = false
-                    blocks.append((startRow, ry2 - 1))
-                }
-                ry2 += 1
+                if has && !inBlock { inBlock = true; sRow = ry }
+                else if !has && inBlock { inBlock = false; blocks.append((sRow, ry - 1)) }
+                ry += 1
             }
-            if inBlock { blocks.append((startRow, y1)) }
+            if inBlock { blocks.append((sRow, bottom)) }
 
             if blocks.count >= 2 {
-                let last = blocks[blocks.count - 1]
-                let prev = blocks[blocks.count - 2]
-                let gap = last.0 - prev.1
-                let lastH = last.1 - last.0 + 1
+                let lastB = blocks[blocks.count - 1]
+                let prevB = blocks[blocks.count - 2]
+                let gap = lastB.0 - prevB.1
+                let lastH = lastB.1 - lastB.0 + 1
                 if Double(gap) > Double(cardH) * 0.06 &&
                     Double(lastH) < Double(cardH) * 0.05 &&
-                    last.0 > y0 + Int(Double(cardH) * 0.8) {
-                    y1 = min(y1, prev.1 + 12)
+                    lastB.0 > top + Int(Double(cardH) * 0.8) {
+                    bottom = min(bottom, prevB.1 + 12)
                 }
             }
         }
 
-        let rect = CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1)
+        let rect = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
         guard let cropped = cg.cropping(to: rect) else { return image }
         return UIImage(cgImage: cropped, scale: image.scale, orientation: .up)
     }
