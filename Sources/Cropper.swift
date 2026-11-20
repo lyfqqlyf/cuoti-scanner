@@ -50,7 +50,7 @@ enum Cropper {
         }
         func isContent(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
-            return buffer[o] < 245 || buffer[o + 1] < 245 || buffer[o + 2] < 245
+            return buffer[o] < 200 || buffer[o + 1] < 200 || buffer[o + 2] < 200
         }
 
         var whiteFrac = [Double](repeating: 0, count: h)
