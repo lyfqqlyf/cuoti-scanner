@@ -43,29 +43,33 @@ enum Cropper {
 
             func isWhite(_ x: Int, _ y: Int) -> Bool {
                 let o = y * bpr + x * bpp
-                return buffer[o] >= 240 && buffer[o + 1] >= 240 && buffer[o + 2] >= 240
+                return buffer[o] >= 250 && buffer[o + 1] >= 250 && buffer[o + 2] >= 250
             }
 
-            var bestLen = 0
+            var firsts: [Int] = []
+            var lasts: [Int] = []
             let span = max(1, y1 - y0)
             for k in 0..<24 {
                 let sy = y0 + span * (k + 1) / 25
                 if sy >= h { continue }
-                var st = -1
+                var f = -1
+                var l = -1
                 var x = 0
                 while x < w {
                     if isWhite(x, sy) {
-                        if st < 0 { st = x }
-                    } else if st >= 0 {
-                        if x - st > bestLen { bestLen = x - st; left = st; right = x - 1 }
-                        st = -1
+                        if f < 0 { f = x }
+                        l = x
                     }
                     x += 1
                 }
-                if st >= 0 && w - st > bestLen { bestLen = w - st; left = st; right = w - 1 }
+                if f >= 0 { firsts.append(f); lasts.append(l) }
             }
-            // 白段太窄说明没找到卡片，退回整宽
-            if bestLen < w / 3 { left = 0; right = w - 1 }
+            if firsts.count >= 3 {
+                firsts.sort()
+                lasts.sort()
+                left = firsts[firsts.count / 2]
+                right = lasts[lasts.count / 2]
+            }
         }
 
         let rect = CGRect(x: left, y: y0, width: max(1, right - left + 1), height: max(1, y1 - y0))
@@ -116,7 +120,7 @@ enum Cropper {
 
         func isWhite(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
-            return buffer[o] >= 246 && buffer[o + 1] >= 246 && buffer[o + 2] >= 246
+            return buffer[o] >= 250 && buffer[o + 1] >= 250 && buffer[o + 2] >= 250
         }
         func isDark(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
