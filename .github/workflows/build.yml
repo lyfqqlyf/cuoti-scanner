@@ -1,4 +1,4 @@
-name: build-ipa
+﻿name: build-ipa
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
@@ -45,7 +45,7 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          # ad-hoc 签名（TrollStore 安装更稳；失败也不影响后续打包）
+          # ad-hoc 绛惧悕锛圱rollStore 瀹夎鏇寸ǔ锛涘け璐ヤ篃涓嶅奖鍝嶅悗缁墦鍖咃級
           brew install ldid || true
           ldid -S Payload/CuotiScanner.app/CuotiScanner || true
           zip -qry CuotiScanner.ipa Payload
@@ -57,3 +57,4 @@ jobs:
           name: CuotiScanner-ipa
           path: CuotiScanner.ipa
           if-no-files-found: error
+
