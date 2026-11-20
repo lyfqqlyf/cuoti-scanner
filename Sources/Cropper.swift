@@ -17,15 +17,64 @@ enum Cropper {
         }
         let w = cgImg.width
         let h = cgImg.height
+        guard w > 60, h > 60 else {
+            return Result(image: image, rect: .zero, info: "图太小")
+        }
+
         let y0 = Int(Double(h) * max(0, min(0.9, topPct)))
         let y1 = Int(Double(h) * max(topPct + 0.05, min(1.0, bottomPct)))
-        let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
+
+        // 在 y0..y1 内扫白色段，定左右边界（去掉两侧灰边）
+        var left = 0
+        var right = w - 1
+        let bpp = 4
+        let bpr = w * bpp
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: h * bpr)
+        buffer.initialize(repeating: 0, count: h * bpr)
+        defer { buffer.deallocate() }
+
+        let cs = CGColorSpaceCreateDeviceRGB()
+        if let ctx = CGContext(data: buffer, width: w, height: h,
+                               bitsPerComponent: 8, bytesPerRow: bpr, space: cs,
+                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.translateBy(x: 0, y: CGFloat(h))
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+            func isWhite(_ x: Int, _ y: Int) -> Bool {
+                let o = y * bpr + x * bpp
+                return buffer[o] >= 240 && buffer[o + 1] >= 240 && buffer[o + 2] >= 240
+            }
+
+            var bestLen = 0
+            let span = max(1, y1 - y0)
+            for k in 0..<24 {
+                let sy = y0 + span * (k + 1) / 25
+                if sy >= h { continue }
+                var st = -1
+                var x = 0
+                while x < w {
+                    if isWhite(x, sy) {
+                        if st < 0 { st = x }
+                    } else if st >= 0 {
+                        if x - st > bestLen { bestLen = x - st; left = st; right = x - 1 }
+                        st = -1
+                    }
+                    x += 1
+                }
+                if st >= 0 && w - st > bestLen { bestLen = w - st; left = st; right = w - 1 }
+            }
+            // 白段太窄说明没找到卡片，退回整宽
+            if bestLen < w / 3 { left = 0; right = w - 1 }
+        }
+
+        let rect = CGRect(x: left, y: y0, width: max(1, right - left + 1), height: max(1, y1 - y0))
         guard let c = cgImg.cropping(to: rect) else {
             return Result(image: image, rect: .zero, info: "裁剪失败")
         }
         return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
                       rect: rect,
-                      info: "手动 \(Int(topPct * 100))%~\(Int(bottomPct * 100))% → \(Int(rect.width))x\(Int(rect.height))")
+                      info: "手动 \(Int(topPct * 100))%~\(Int(bottomPct * 100))% x\(left)~\(right) → \(Int(rect.width))x\(Int(rect.height))")
     }
 
     // MARK: - 自动检测
