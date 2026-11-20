@@ -14,7 +14,7 @@ struct ContentView: View {
                 content
                 bottomBar
             }
-            .navigationTitle("错题卷")
+            .navigationTitle(versionText)
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showPicker) {
                 PhotoPicker { imgs in
@@ -110,6 +110,12 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+    }
+
+    private var versionText: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        return "错题卷 v\(v)(\(b))"
     }
 
     private func documentsDir() -> URL {

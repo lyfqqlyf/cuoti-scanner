@@ -1,4 +1,4 @@
-﻿name: build-ipa
+name: build-ipa
 
 on:
   push:
@@ -42,19 +42,27 @@ jobs:
           set -e
           APP="build/Build/Products/Release-iphoneos/CuotiScanner.app"
           ls -la "$APP"
+
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Info.plist")
+          SHA=$(git rev-parse --short HEAD)
+          NAME="CuotiScanner-v${VERSION}-b${BUILD}-${SHA}.ipa"
+          echo "IPA_NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "IPA_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "IPA_BUILD=${BUILD}" >> "$GITHUB_ENV"
+          echo "IPA_SHA=${SHA}" >> "$GITHUB_ENV"
+
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          # ad-hoc 绛惧悕锛圱rollStore 瀹夎鏇寸ǔ锛涘け璐ヤ篃涓嶅奖鍝嶅悗缁墦鍖咃級
           brew install ldid || true
           ldid -S Payload/CuotiScanner.app/CuotiScanner || true
-          zip -qry CuotiScanner.ipa Payload
-          ls -lh CuotiScanner.ipa
+          zip -qry "$NAME" Payload
+          ls -lh "$NAME"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: CuotiScanner-ipa
-          path: CuotiScanner.ipa
+          name: ${{ env.IPA_NAME }}
+          path: ${{ env.IPA_NAME }}
           if-no-files-found: error
-
