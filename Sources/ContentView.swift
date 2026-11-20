@@ -14,18 +14,19 @@ struct ContentView: View {
     @State private var showPicker = false
     @State private var showShare = false
     @State private var shareItems: [Any] = []
-    @State private var status = "选几张截图"
+    @State private var status = "选几张截图，用四个滑块框住题目区"
 
-    // 手动模式
-    @State private var manual = true
+    // 四个百分比
     @State private var topPct: Double = 0.15
     @State private var bottomPct: Double = 0.70
+    @State private var leftPct: Double = 0.08
+    @State private var rightPct: Double = 0.92
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 content
-                controls
+                sliders
                 bottomBar
             }
             .navigationTitle(versionText)
@@ -61,6 +62,8 @@ struct ContentView: View {
                 Text(status)
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
                     .padding(.top, 14)
                 Spacer()
             }
@@ -74,7 +77,7 @@ struct ContentView: View {
                                 .scaledToFit()
                                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
                             Text(it.info)
-                                .font(.system(size: 9))
+                                .font(.system(size: 8))
                                 .foregroundColor(.secondary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
@@ -86,29 +89,24 @@ struct ContentView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(spacing: 6) {
-            Toggle("手动调整裁剪范围", isOn: $manual)
-                .font(.footnote)
-                .onChange(of: manual) { _ in rebuild() }
-
-            if manual {
-                HStack {
-                    Text("顶部 \(Int(topPct * 100))%")
-                        .font(.caption2)
-                        .frame(width: 70, alignment: .leading)
-                    Slider(value: $topPct, in: 0...0.5, step: 0.01) { _ in rebuild() }
-                }
-                HStack {
-                    Text("底部 \(Int(bottomPct * 100))%")
-                        .font(.caption2)
-                        .frame(width: 70, alignment: .leading)
-                    Slider(value: $bottomPct, in: 0.3...1.0, step: 0.01) { _ in rebuild() }
-                }
-            }
+    private var sliders: some View {
+        VStack(spacing: 2) {
+            row("顶部", value: $topPct, range: 0...0.6)
+            row("底部", value: $bottomPct, range: 0.2...1.0)
+            row("左边", value: $leftPct, range: 0...0.4)
+            row("右边", value: $rightPct, range: 0.6...1.0)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 4)
+    }
+
+    private func row(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 8) {
+            Text("\(title) \(Int(value.wrappedValue * 100))%")
+                .font(.system(size: 11))
+                .frame(width: 68, alignment: .leading)
+            Slider(value: value, in: range, step: 0.01) { _ in rebuild() }
+        }
     }
 
     private var bottomBar: some View {
@@ -148,9 +146,11 @@ struct ContentView: View {
         var out: [CropItem] = []
         var lastInfo = ""
         for img in originals {
-            let r = manual
-                ? Cropper.cropManual(img, topPct: topPct, bottomPct: bottomPct)
-                : Cropper.cropAuto(img)
+            let r = Cropper.crop(img,
+                                 topPct: topPct,
+                                 bottomPct: bottomPct,
+                                 leftPct: leftPct,
+                                 rightPct: rightPct)
             let pv = Self.drawOverlay(original: img, rect: r.rect)
             out.append(CropItem(preview: pv, cropped: r.image, info: r.info))
             lastInfo = r.info

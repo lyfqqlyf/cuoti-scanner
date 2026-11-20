@@ -1,6 +1,6 @@
 import UIKit
 
-/// 裁剪：自动检测 + 手动百分比两种模式
+/// 纯比例裁剪：上下左右四个百分比，不做任何图像识别。
 enum Cropper {
 
     struct Result {
@@ -9,172 +9,34 @@ enum Cropper {
         let info: String
     }
 
-    // MARK: - 手动百分比裁剪（最可靠）
-
-    static func cropManual(_ image: UIImage, topPct: Double, bottomPct: Double) -> Result {
+    static func crop(_ image: UIImage,
+                     topPct: Double,
+                     bottomPct: Double,
+                     leftPct: Double,
+                     rightPct: Double) -> Result {
         guard let cgImg = image.cgImage else {
             return Result(image: image, rect: .zero, info: "无 CGImage")
         }
         let w = cgImg.width
         let h = cgImg.height
-        guard w > 60, h > 60 else {
+        guard w > 20, h > 20 else {
             return Result(image: image, rect: .zero, info: "图太小")
         }
 
-        let y0 = Int(Double(h) * max(0, min(0.9, topPct)))
-        let y1 = Int(Double(h) * max(topPct + 0.05, min(1.0, bottomPct)))
+        let x0 = Int(Double(w) * max(0, min(0.95, leftPct)))
+        let x1 = Int(Double(w) * max(leftPct + 0.03, min(1.0, rightPct)))
+        let y0 = Int(Double(h) * max(0, min(0.95, topPct)))
+        let y1 = Int(Double(h) * max(topPct + 0.03, min(1.0, bottomPct)))
 
-        // 在 y0..y1 内扫白色段，定左右边界（去掉两侧灰边）
-        var left = 0
-        var right = w - 1
-        let bpp = 4
-        let bpr = w * bpp
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: h * bpr)
-        buffer.initialize(repeating: 0, count: h * bpr)
-        defer { buffer.deallocate() }
-
-        let cs = CGColorSpaceCreateDeviceRGB()
-        if let ctx = CGContext(data: buffer, width: w, height: h,
-                               bitsPerComponent: 8, bytesPerRow: bpr, space: cs,
-                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-            ctx.translateBy(x: 0, y: CGFloat(h))
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-            func isWhite(_ x: Int, _ y: Int) -> Bool {
-                let o = y * bpr + x * bpp
-                return buffer[o] >= 250 && buffer[o + 1] >= 250 && buffer[o + 2] >= 250
-            }
-
-            var firsts: [Int] = []
-            var lasts: [Int] = []
-            let span = max(1, y1 - y0)
-            for k in 0..<24 {
-                let sy = y0 + span * (k + 1) / 25
-                if sy >= h { continue }
-                var f = -1
-                var l = -1
-                var x = 0
-                while x < w {
-                    if isWhite(x, sy) {
-                        if f < 0 { f = x }
-                        l = x
-                    }
-                    x += 1
-                }
-                if f >= 0 { firsts.append(f); lasts.append(l) }
-            }
-            if firsts.count >= 3 {
-                firsts.sort()
-                lasts.sort()
-                left = firsts[firsts.count / 2]
-                right = lasts[lasts.count / 2]
-            }
-        }
-
-        let rect = CGRect(x: left, y: y0, width: max(1, right - left + 1), height: max(1, y1 - y0))
+        let rect = CGRect(x: x0, y: y0,
+                          width: max(1, x1 - x0),
+                          height: max(1, y1 - y0))
         guard let c = cgImg.cropping(to: rect) else {
             return Result(image: image, rect: .zero, info: "裁剪失败")
         }
+        let info = "上\(Int(topPct * 100))% 下\(Int(bottomPct * 100))% 左\(Int(leftPct * 100))% 右\(Int(rightPct * 100))% → \(Int(rect.width))x\(Int(rect.height))"
         return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
                       rect: rect,
-                      info: "手动 \(Int(topPct * 100))%~\(Int(bottomPct * 100))% x\(left)~\(right) → \(Int(rect.width))x\(Int(rect.height))")
-    }
-
-    // MARK: - 自动检测
-
-    static func cropAuto(_ image: UIImage) -> Result {
-        var cg = image.cgImage
-        if cg == nil {
-            let fmt = UIGraphicsImageRendererFormat.default()
-            fmt.scale = 1
-            let r = UIGraphicsImageRenderer(size: image.size, format: fmt)
-            let rendered = r.image { _ in image.draw(at: .zero) }
-            cg = rendered.cgImage
-        }
-        guard let cgImg = cg else {
-            return Result(image: image, rect: .zero, info: "无 CGImage")
-        }
-
-        let w = cgImg.width
-        let h = cgImg.height
-        guard w > 60, h > 60 else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "图太小")
-        }
-
-        let bpp = 4
-        let bpr = w * bpp
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: h * bpr)
-        buffer.initialize(repeating: 0, count: h * bpr)
-        defer { buffer.deallocate() }
-
-        let cs = CGColorSpaceCreateDeviceRGB()
-        guard let ctx = CGContext(data: buffer, width: w, height: h,
-                                  bitsPerComponent: 8, bytesPerRow: bpr, space: cs,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "建位图失败")
-        }
-        ctx.translateBy(x: 0, y: CGFloat(h))
-        ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-        func isWhite(_ x: Int, _ y: Int) -> Bool {
-            let o = y * bpr + x * bpp
-            return buffer[o] >= 250 && buffer[o + 1] >= 250 && buffer[o + 2] >= 250
-        }
-        func isDark(_ x: Int, _ y: Int) -> Bool {
-            let o = y * bpr + x * bpp
-            return buffer[o] < 200 || buffer[o + 1] < 200 || buffer[o + 2] < 200
-        }
-
-        var whiteFrac = [Double](repeating: 0, count: h)
-        for y in 0..<h {
-            var wc = 0
-            var x = 0
-            while x < w {
-                if isWhite(x, y) { wc += 1 }
-                x += 1
-            }
-            whiteFrac[y] = Double(wc) / Double(w)
-        }
-
-        // 找最长的白行段（页面卡片）
-        var runs: [(Int, Int)] = []
-        var s = -1
-        for y in 0..<h {
-            if whiteFrac[y] > 0.3 {
-                if s < 0 { s = y }
-            } else if s >= 0 {
-                runs.append((s, y - 1))
-                s = -1
-            }
-        }
-        if s >= 0 { runs.append((s, h - 1)) }
-
-        let mergeGap = max(10, Int(Double(h) * 0.025))
-        var merged: [(Int, Int)] = []
-        for r in runs {
-            if let last = merged.last, r.0 - last.1 <= mergeGap {
-                merged[merged.count - 1] = (last.0, r.1)
-            } else {
-                merged.append(r)
-            }
-        }
-        merged = merged.filter { $0.1 - $0.0 >= Int(Double(h) * 0.15) }
-
-        guard let band = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "找不到白色页")
-        }
-
-        // 直接用白色卡片段的起止，不再做深色收紧
-        let y0 = band.0
-        let y1 = band.1
-        let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
-        guard let c = cgImg.cropping(to: rect) else {
-            return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "裁剪失败")
-        }
-        return Result(image: UIImage(cgImage: c, scale: 1, orientation: .up),
-                      rect: rect,
-                      info: "自动 → \(Int(rect.minY))~\(Int(rect.maxY)) = \(Int(rect.width))x\(Int(rect.height))")
+                      info: info)
     }
 }
