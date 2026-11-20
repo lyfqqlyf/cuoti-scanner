@@ -113,56 +113,9 @@ enum Cropper {
             return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "找不到白色页")
         }
 
-        // 卡片内找第一行和最后一行深色内容
-        var firstDark = -1
-        var lastDark = -1
-        for y in band.0...band.1 {
-            var has = false
-            var x = 0
-            while x < w {
-                if isDark(x, y) { has = true; break }
-                x += 1
-            }
-            if has {
-                if firstDark < 0 { firstDark = y }
-                lastDark = y
-            }
-        }
-        if firstDark < 0 || lastDark < 0 {
-            return Result(image: image, rect: CGRect(x: 0, y: band.0, width: w, height: band.1 - band.0 + 1), info: "无深色内容")
-        }
-
-        // 最后一块内容如果孤立在底部（页码），去掉它
-        var blocks: [(Int, Int)] = []
-        var inBlock = false
-        var sRow = 0
-        for y in band.0...band.1 {
-            var has = false
-            var x = 0
-            while x < w {
-                if isDark(x, y) { has = true; break }
-                x += 1
-            }
-            if has && !inBlock { inBlock = true; sRow = y }
-            else if !has && inBlock { inBlock = false; blocks.append((sRow, y - 1)) }
-        }
-        if inBlock { blocks.append((sRow, band.1)) }
-
-        var bottomLimit = lastDark
-        if blocks.count >= 2 {
-            let lastB = blocks[blocks.count - 1]
-            let prevB = blocks[blocks.count - 2]
-            let gap = lastB.0 - prevB.1
-            let lastH = lastB.1 - lastB.0 + 1
-            let bandH = band.1 - band.0 + 1
-            if gap > Int(Double(bandH) * 0.05) && lastH < Int(Double(bandH) * 0.06) {
-                bottomLimit = prevB.1
-            }
-        }
-
-        let pad = 24
-        let y0 = max(band.0, firstDark - pad)
-        let y1 = min(band.1, bottomLimit + pad)
+        // 直接用白色卡片段的起止，不再做深色收紧
+        let y0 = band.0
+        let y1 = band.1
         let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
         guard let c = cgImg.cropping(to: rect) else {
             return Result(image: image, rect: CGRect(x: 0, y: 0, width: w, height: h), info: "裁剪失败")

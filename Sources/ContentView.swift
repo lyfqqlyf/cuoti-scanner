@@ -17,7 +17,7 @@ struct ContentView: View {
     @State private var status = "选几张截图"
 
     // 手动模式
-    @State private var manual = false
+    @State private var manual = true
     @State private var topPct: Double = 0.15
     @State private var bottomPct: Double = 0.70
 
