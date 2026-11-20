@@ -1,17 +1,22 @@
 import UIKit
 
-/// 从截图里裁出试卷内容：
-/// 1) 行扫描找「最长的连续白色行段」= 页面卡片（允许小缺口）
-/// 2) 用最长白色段定左右边界
-/// 3) 纵向按非白内容收紧（横向保持卡片宽度，保证多页字号一致）
-/// 4) 去掉底部孤立的页码行（如「第2页/共3页」）
+/// 从截图里裁出试卷内容，并返回「原图尺寸 → 裁剪尺寸」的诊断字符串。
 enum Cropper {
 
-    static func cropPage(_ image: UIImage) -> UIImage {
-        guard let cg = image.cgImage else { return image }
-        let w = cg.width
-        let h = cg.height
-        guard w > 60, h > 60 else { return image }
+    static func cropPage(_ image: UIImage) -> (UIImage, String) {
+        var cg = image.cgImage
+        if cg == nil {
+            let fmt = UIGraphicsImageRendererFormat.default()
+            fmt.scale = 1
+            let r = UIGraphicsImageRenderer(size: image.size, format: fmt)
+            let rendered = r.image { _ in image.draw(at: .zero) }
+            cg = rendered.cgImage
+        }
+        guard let cgImg = cg else { return (image, "无 CGImage，跳过") }
+
+        let w = cgImg.width
+        let h = cgImg.height
+        guard w > 60, h > 60 else { return (image, "图太小 \(w)x\(h)") }
 
         let bpp = 4
         let bpr = w * bpp
@@ -20,18 +25,14 @@ enum Cropper {
         defer { buffer.deallocate() }
 
         let cs = CGColorSpaceCreateDeviceRGB()
-        guard let ctx = CGContext(data: buffer,
-                                  width: w,
-                                  height: h,
-                                  bitsPerComponent: 8,
-                                  bytesPerRow: bpr,
-                                  space: cs,
+        guard let ctx = CGContext(data: buffer, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: bpr, space: cs,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return image
+            return (image, "建位图失败 \(w)x\(h)")
         }
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: w, height: h))
 
         func isWhite(_ x: Int, _ y: Int) -> Bool {
             let o = y * bpr + x * bpp
@@ -42,10 +43,8 @@ enum Cropper {
             return buffer[o] < 245 || buffer[o + 1] < 245 || buffer[o + 2] < 245
         }
 
-        // 每行白色占比
         var whiteFrac = [Double](repeating: 0, count: h)
-        var y = 0
-        while y < h {
+        for y in 0..<h {
             var wc = 0
             var x = 0
             while x < w {
@@ -53,17 +52,16 @@ enum Cropper {
                 x += 1
             }
             whiteFrac[y] = Double(wc) / Double(w)
-            y += 1
         }
 
         // 连续白行段（允许小缺口）
         var runs: [(Int, Int)] = []
         var start = -1
-        for yy in 0..<h {
-            if whiteFrac[yy] > 0.5 {
-                if start < 0 { start = yy }
+        for y in 0..<h {
+            if whiteFrac[y] > 0.5 {
+                if start < 0 { start = y }
             } else if start >= 0 {
-                runs.append((start, yy - 1))
+                runs.append((start, y - 1))
                 start = -1
             }
         }
@@ -78,13 +76,26 @@ enum Cropper {
                 merged.append(r)
             }
         }
-        guard var best = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else { return image }
-        if best.1 - best.0 < h / 5 { return image }
+
+        func fallback(_ why: String) -> (UIImage, String) {
+            let y0 = Int(Double(h) * 0.05)
+            let y1 = Int(Double(h) * 0.78)
+            let rect = CGRect(x: 0, y: y0, width: w, height: max(1, y1 - y0))
+            if let c = cgImg.cropping(to: rect) {
+                return (UIImage(cgImage: c, scale: 1, orientation: .up),
+                        "\(why)，兜底 \(w)x\(h) → \(Int(rect.width))x\(Int(rect.height))")
+            }
+            return (image, "\(why)，未裁剪 \(w)x\(h)")
+        }
+
+        guard let best = merged.max(by: { ($0.1 - $0.0) < ($1.1 - $1.0) }) else {
+            return fallback("找不到白色页")
+        }
+        if best.1 - best.0 < h / 5 { return fallback("白页太短") }
 
         var top = best.0
         var bottom = best.1
 
-        // 左右：页面中段多行取最长白色段
         var left = 0
         var right = w - 1
         var bestLen = 0
@@ -105,22 +116,19 @@ enum Cropper {
         }
         if bestLen < w / 3 { left = 0; right = w - 1 }
 
-        // 纵向按内容收紧
         var cy0 = -1
         var cy1 = -1
-        var yy2 = top
-        while yy2 <= bottom {
+        for yy in top...bottom {
             var has = false
             var xx = left
             while xx <= right {
-                if isContent(xx, yy2) { has = true; break }
+                if isContent(xx, yy) { has = true; break }
                 xx += 1
             }
             if has {
-                if cy0 < 0 { cy0 = yy2 }
-                cy1 = yy2
+                if cy0 < 0 { cy0 = yy }
+                cy1 = yy
             }
-            yy2 += 1
         }
         if cy0 >= 0 {
             let pad = 24
@@ -134,8 +142,7 @@ enum Cropper {
             var blocks: [(Int, Int)] = []
             var inBlock = false
             var sRow = 0
-            var ry = top
-            while ry <= bottom {
+            for ry in top...bottom {
                 var has = false
                 var rx = left
                 while rx <= right {
@@ -144,7 +151,6 @@ enum Cropper {
                 }
                 if has && !inBlock { inBlock = true; sRow = ry }
                 else if !has && inBlock { inBlock = false; blocks.append((sRow, ry - 1)) }
-                ry += 1
             }
             if inBlock { blocks.append((sRow, bottom)) }
 
@@ -162,7 +168,10 @@ enum Cropper {
         }
 
         let rect = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
-        guard let cropped = cg.cropping(to: rect) else { return image }
-        return UIImage(cgImage: cropped, scale: image.scale, orientation: .up)
+        guard let cropped = cgImg.cropping(to: rect) else {
+            return fallback("裁剪失败")
+        }
+        let out = UIImage(cgImage: cropped, scale: 1, orientation: .up)
+        return (out, "\(w)x\(h) → \(Int(rect.width))x\(Int(rect.height))")
     }
 }

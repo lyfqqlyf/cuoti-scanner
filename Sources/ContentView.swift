@@ -20,11 +20,14 @@ struct ContentView: View {
                 PhotoPicker { imgs in
                     guard !imgs.isEmpty else { return }
                     var out: [UIImage] = []
+                    var detail = ""
                     for img in imgs {
-                        out.append(Cropper.cropPage(img))
+                        let r = Cropper.cropPage(img)
+                        out.append(r.0)
+                        if detail.isEmpty { detail = r.1 }
                     }
                     cropped = out
-                    status = "已裁剪 \(out.count) 页，点右边生成文件"
+                    status = "已裁剪 \(out.count) 页：\(detail)"
                 }
             }
         }
